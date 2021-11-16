@@ -5,6 +5,10 @@ import logging
 import numpy as np
 from scipy.optimize import fmin_l_bfgs_b
 import matplotlib.pyplot as plt
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import *
+from scipy.stats import norm
+from scipy.stats import bernoulli
 
 EXTENDED_EVALUATION = False
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
@@ -18,11 +22,23 @@ class BO_algo(object):
         """Initializes the algorithm with a parameter configuration. """
 
         # TODO: enter your code here
-        self.previous_points = []
+        self.previous_points = []  # is a list of lists containing, x11, x12, acq1, cond1
+        self.previous_X = []
+        self.previous_acq = []
+        self.previous_cond = []
+
         # IMPORTANT: DO NOT REMOVE THOSE ATTRIBUTES AND USE sklearn.gaussian_process.GaussianProcessRegressor instances!
         # Otherwise, the extended evaluation will break.
         self.constraint_model = None  # TODO : GP model for the constraint function
         self.objective_model = None  # TODO : GP model for your acquisition function
+
+        # My implementation
+        k1 = ConstantKernel(
+            1.5, constant_value_bounds=(1e-010, 100000.0)) * RBF(1.5, length_scale_bounds=(1e-010, 100000))
+        k2 = ConstantKernel(3.5, constant_value_bounds=(
+            1e-010, 100000.0)) * RBF(2, length_scale_bounds=(1e-010, 100000))
+        self.constraint_model = GaussianProcessRegressor(k1)
+        self.objective_model = GaussianProcessRegressor(k2)
 
     def next_recommendation(self) -> np.ndarray:
         """
@@ -37,7 +53,36 @@ class BO_algo(object):
         # TODO: enter your code here
         # In implementing this function, you may use optimize_acquisition_function() defined below.
 
-    def optimize_acquisition_function(self) -> np.ndarray:  # DON'T MODIFY THIS FUNCTION
+        # In my idea, this should either use the acquisition function OR at times a random point
+        # to prevent it from stucking somewhere..
+
+        # with p=0.25 we will query a random point to avoid stucking somewhere.
+        coin = bernoulli.rvs(p=0.4, size=1)
+        if coin == 1 and self.previous_X:
+            idx = np.argmin(self.previous_cond)
+            x = np.array(self.previous_X[idx]).reshape(1, -1)
+            mean, std = self.constraint_model.predict(x, return_std=True)
+            lb = mean - 2 * std
+            ub = mean + 2 * std
+            if lb > 6 or lb < 0 and ub > 6 or ub < 0:
+                return np.ndarray((1, 2), buffer=np.random.uniform(0, 6, 2))
+            elif lb < 0 and ub < 6:
+                return np.ndarray((1, 2), buffer=np.random.uniform(0, ub, 2))
+            elif lb > 0 and ub > 6:
+                return np.ndarray((1, 2), buffer=np.random.uniform(lb, 6, 2))
+            else:
+                return np.ndarray((1, 2), buffer=np.random.uniform(lb, ub, 2))
+
+        else:
+            x_star = self.optimize_acquisition_function()
+            if self.constraint_model.predict(x_star) > 3:
+                x_star = self.optimize_acquisition_function()
+            return x_star
+
+    # DON'T MODIFY THIS FUNCTION
+    # returns x1, x2 that optimize acq. fct.
+
+    def optimize_acquisition_function(self) -> np.ndarray:
         """
         Optimizes the acquisition function.
 
@@ -47,6 +92,7 @@ class BO_algo(object):
             1 x domain.shape[0] array containing the point that approximately maximizes the acquisition function.
         """
 
+        # objective is then the function we define in acquisition_function() !!! ! ! !! ! ! ! !!IMPORTANT
         def objective(x: np.array):
             return - self.acquisition_function(x)
 
@@ -56,9 +102,9 @@ class BO_algo(object):
         # Restarts the optimization 20 times and pick best solution
         for _ in range(20):
             x0 = domain_x[0, 0] + (domain_x[0, 1] - domain_x[0, 0]) * \
-                 np.random.rand(1)
+                np.random.rand(1)
             x1 = domain_x[1, 0] + (domain_x[1, 1] - domain_x[1, 0]) * \
-                 np.random.rand(1)
+                np.random.rand(1)
             result = fmin_l_bfgs_b(objective, x0=np.array([x0, x1]), bounds=domain_x,
                                    approx_grad=True)
             x_values.append(np.clip(result[0], *domain_x[0]))
@@ -68,6 +114,10 @@ class BO_algo(object):
         return np.atleast_2d(x_values[ind])
 
     def acquisition_function(self, x: np.ndarray) -> np.ndarray:
+        # acq. fct guides how the space should be explored
+        # want exploration and exploitation --> trade off
+        # we maximize a value... many possibilities
+        # actually independent of the fact if its a min. or a max. problem i think
         """
         Compute the acquisition function.
 
@@ -83,6 +133,50 @@ class BO_algo(object):
         """
 
         # TODO: enter your code here
+        # Gelbart et al propose to use the Expected Improvement criterion
+        # "when the predictive distribution under the model is gaussian, the EI has closed-form:"
+        # EI(X) = sigma(x)(z(x)PHI(z(x)) + phi(z(x)) ), where z(x) = (t-mu(x))/sigma(x)
+        # we chose t to be the minimum value of acq. fct we observed so far
+        x = x.reshape(1, -1)
+        k = 8
+        while self.previous_X:
+            xi = k
+            k = k / 1.5
+            mu, sigma = self.objective_model.predict(
+                x, return_std=True)
+            X = np.array(self.previous_X)
+            mu_sample = self.objective_model.predict(X)
+            mu_sample_opt = min(mu_sample)
+
+            mu_constraints = self.constraint_model.predict(X)
+            k = np.prod(mu_constraints)
+
+            imp = mu - mu_sample_opt - xi  # xi is to tune!
+            Z = imp / sigma
+            ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)  # norm is from scipy
+            ei[sigma == 0.0] = 0.0
+            ei = ei * np.exp(self.constraint_model.log_marginal_likelihood())
+            return float(ei)
+
+        # we'll try an easier approach first.
+        #... how can we take into account the constraint model...
+        x = x.reshape(1, -1)
+
+        mu1, sigma1 = self.objective_model.predict(
+            x, return_std=True)  # ODER RETURN COV?
+        beta1 = 10  # tuning parameter to tune exploration/exploitation
+
+        mu2, sigma2 = self.constraint_model.predict(
+            x, return_std=True)
+        beta2 = 5.5
+
+        coin = bernoulli.rvs(p=0.0000000001, size=1)
+
+        if coin == 1:
+            return float(mu2 + sigma2 * beta2)
+        else:  # let's try to weight it by c()
+            return float((mu1 + sigma1 * beta1) * 1)
+
         raise NotImplementedError
 
     def add_data_point(self, x: np.ndarray, z: float, c: float):
@@ -99,9 +193,22 @@ class BO_algo(object):
             value of the condition function at x
         """
 
+        # x is 2-dimensional --> need to append both dimensions
         assert x.shape == (1, 2)
-        self.previous_points.append([float(x[:, 0]), float(x[:, 1]), float(z), float(c)])
+        self.previous_points.append(
+            [float(x[:, 0]), float(x[:, 1]), float(z), float(c)])
         # TODO: enter your code here
+        self.previous_X.append([float(x[:, 0]), float(x[:, 1])])
+        self.previous_acq.append(float(z))
+        self.previous_cond.append(float(c))
+
+        # since we add data points; do we have to update the posterior?
+        # we have now one more observation --> we can update our c() and f()
+        self.objective_model = self.objective_model.fit(
+            self.previous_X, self.previous_acq)
+        self.constraint_model = self.constraint_model.fit(
+            self.previous_X, self.previous_cond)
+        return 0  # i don't think i have to return something...?
         raise NotImplementedError
 
     def get_solution(self) -> np.ndarray:
@@ -115,6 +222,31 @@ class BO_algo(object):
         """
 
         # TODO: enter your code here
+        acq = self.previous_acq
+        cond = self.previous_cond
+
+        while True:
+            idx = np.argmin(acq)
+            # need to check if at the minimum, the constraint is not violated!
+            if (acq[idx] == 99999):  # if we don't have a point, choose one from sampled constraints fct
+                for i in range(len(cond)):
+                    idx_cond = np.argmin(cond)
+                    cur = cond[idx_cond]
+
+                    if cond[idx_cond] == 9999:  # if we have no sol at alllllll
+                        return np.ndarray((1, 2), buffer=np.random.uniform(0, 6, 2))
+
+                    if self.previous_cond[idx_cond] < 0:
+                        return self.previous_X[idx_cond]
+                    else:
+                        cond[idx_cond] = 9999
+
+            if (self.previous_cond[idx] < 0):
+                return self.previous_X[idx]
+
+            else:
+                acq[idx] = 99999
+
         raise NotImplementedError
 
 
@@ -125,29 +257,32 @@ class BO_algo(object):
 """
 domain_x = np.array([[0, 6], [0, 6]])
 EVALUATION_GRID_POINTS = 250
-CONSTRAINT_OFFSET = - 0.8  # This is an offset you can change to make the constraint more or less difficult to fulfill
+# This is an offset you can change to make the constraint more or less difficult to fulfill
+CONSTRAINT_OFFSET = - 0.8
 LAMBDA = 0.0  # You shouldn't change this value
 
 
 def check_in_domain(x) -> bool:
     """Validate input"""
     x = np.atleast_2d(x)
-    v_dim_0 = np.all(x[:, 0] >= domain_x[0, 0]) and np.all(x[:, 0] <= domain_x[0, 1])
-    v_dim_1 = np.all(x[:, 1] >= domain_x[1, 0]) and np.all(x[:, 0] <= domain_x[1, 1])
+    v_dim_0 = np.all(x[:, 0] >= domain_x[0, 0]) and np.all(
+        x[:, 0] <= domain_x[0, 1])
+    v_dim_1 = np.all(x[:, 1] >= domain_x[1, 0]) and np.all(
+        x[:, 0] <= domain_x[1, 1])
 
     return v_dim_0 and v_dim_1
 
 
 def f(x) -> np.ndarray:
     """Dummy objective"""
-    l1 = lambda x0, x1: np.sin(x0) + x1 - 1
+    def l1(x0, x1): return np.sin(x0) + x1 - 1
 
     return l1(x[:, 0], x[:, 1])
 
 
 def c(x) -> np.ndarray:
     """Dummy constraint"""
-    c1 = lambda x, y: np.cos(x) * np.cos(y) - 0.1
+    def c1(x, y): return np.cos(x) * np.cos(y) - 0.1
 
     return c1(x[:, 0], x[:, 1]) - CONSTRAINT_OFFSET
 
@@ -163,7 +298,8 @@ def get_valid_opt(f, c, domain) -> typing.Tuple[float, float, np.ndarray, np.nda
     true_cond = c(samples)
     valid_data_idx = np.where(true_cond < LAMBDA)[0]
     f_opt = np.min(true_values[np.where(true_cond < LAMBDA)])
-    x_opt = samples[valid_data_idx][np.argmin(true_values[np.where(true_cond < LAMBDA)])]
+    x_opt = samples[valid_data_idx][np.argmin(
+        true_values[np.where(true_cond < LAMBDA)])]
     f_max = np.max(np.abs(true_values))
     x_max = np.argmax(np.abs(true_values))
     return f_opt, f_max, x_opt, x_max
@@ -178,7 +314,8 @@ def perform_extended_evaluation(agent, output_dir='./'):
     x_b, y_b = agent.get_solution()
     samples = np.array([xv.reshape(-1), yv.reshape(-1)]).T
     predictions, stds = agent.objective_model.predict(samples, return_std=True)
-    predictions = np.reshape(predictions, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
+    predictions = np.reshape(
+        predictions, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
     conds = agent.constraint_model.predict(samples)
     conds = np.reshape(conds, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
 
@@ -187,11 +324,13 @@ def perform_extended_evaluation(agent, output_dir='./'):
     conditions_verif = (true_cond < LAMBDA).astype(float)
     conditions_with_nans = 1 - np.copy(conditions_verif)
     conditions_with_nans[np.where(conditions_with_nans == 0)] = np.nan
-    conditions_with_nans = np.reshape(conditions_with_nans, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
+    conditions_with_nans = np.reshape(
+        conditions_with_nans, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
     valid_data_idx = np.where(true_cond < LAMBDA)[0]
 
     f_opt = np.min(true_values[np.where(true_cond < LAMBDA)])
-    x_opt = samples[valid_data_idx][np.argmin(true_values[np.where(true_cond < LAMBDA)])]
+    x_opt = samples[valid_data_idx][np.argmin(
+        true_values[np.where(true_cond < LAMBDA)])]
 
     sampled_point = np.array(agent.previous_points)
 
@@ -204,7 +343,8 @@ def perform_extended_evaluation(agent, output_dir='./'):
                          label='Sampled Point by BO', antialiased=True, linewidth=0)
     ax_condition.pcolormesh(xv, yv, conditions_with_nans, shading='auto', cmap='Reds', alpha=0.7, vmin=0, vmax=1.0,
                             linewidth=0, antialiased=True)
-    ax_condition.set_title('Constraint GP Posterior +  True Constraint (Red is Infeasible)')
+    ax_condition.set_title(
+        'Constraint GP Posterior +  True Constraint (Red is Infeasible)')
     ax_condition.legend(fontsize='x-small')
 
     ax_gp_f = fig.add_subplot(1, 4, 2, projection='3d')
@@ -232,14 +372,18 @@ def perform_extended_evaluation(agent, output_dir='./'):
     ax_gp_c.set_title('Posterior 3D for Constraint')
 
     ax_predictions = fig.add_subplot(1, 4, 1)
-    im_predictions = ax_predictions.pcolormesh(xv, yv, predictions, shading='auto', label='Posterior',linewidth=0, antialiased=True)
+    im_predictions = ax_predictions.pcolormesh(
+        xv, yv, predictions, shading='auto', label='Posterior', linewidth=0, antialiased=True)
     im_predictions.set_edgecolor('face')
     fig.colorbar(im_predictions, ax=ax_predictions)
     ax_predictions.pcolormesh(xv, yv, conditions_with_nans, shading='auto', cmap='Reds', alpha=0.7, vmin=0, vmax=1.0,
-                              label=' True Infeasible',linewidth=0, antialiased=True)
-    ax_predictions.scatter(x_b, y_b, s=20, marker='x', label='Predicted Value by BO')
-    ax_predictions.scatter(x_opt[0], x_opt[1], s=20, marker='o', label='True Optimimum Under Constraint')
-    ax_predictions.set_title('Objective GP Posterior + True Constraint (Red is Infeasible)')
+                              label=' True Infeasible', linewidth=0, antialiased=True)
+    ax_predictions.scatter(x_b, y_b, s=20, marker='x',
+                           label='Predicted Value by BO')
+    ax_predictions.scatter(
+        x_opt[0], x_opt[1], s=20, marker='o', label='True Optimimum Under Constraint')
+    ax_predictions.set_title(
+        'Objective GP Posterior + True Constraint (Red is Infeasible)')
     ax_predictions.legend(fontsize='x-small')
     figure_path = os.path.join(output_dir, 'extended_evaluation.pdf')
     fig.savefig(figure_path)
