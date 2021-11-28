@@ -175,6 +175,13 @@ class BO_algo(object):
         """
 
         # TODO: enter your code here
+        con_sat = []
+        try:
+            x_opt = min([point for point in self.previous_points if point[3] < 0], key = lambda x: x[2])[:2]
+        except:
+            x_opt = min([point for point in self.previous_points], key = lambda x: x[3])[:2] #if none of the observed datapoints has c<0 we take the one with smallest c.
+        return np.atleast_2d(x_opt)
+        """
         try:
             con_sat = []
             # We are interested in the cases where the condition value is < 0
@@ -188,6 +195,7 @@ class BO_algo(object):
             # if none of the points satisfy the condition we simply take the point with the lowest constraint values
             opt_point = min([point for point in self.previous_points], key=lambda x: x[3])[:2]
         return  np.atleast_2d(opt_point)
+        """
 
 
 """ 
