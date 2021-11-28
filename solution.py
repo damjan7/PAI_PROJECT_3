@@ -132,8 +132,9 @@ class BO_algo(object):
 
         # Step 5: Incorporate the constraint function into the EI according to Gelbart et al (7)
         EI_constraint = scipy.stats.norm(con_mean, con_sigma).cdf(0) # prob that the constraint is satisfied (c<0)
-        #EI = EI*EI_constraint
-        EI = EI * np.exp(self.constraint_model.log_marginal_likelihood())
+        likelihood = np.exp(self.constraint_model.log_marginal_likelihood())
+
+        EI = EI * ((EI_constraint + likelihood)/2)
 
         return EI
 
