@@ -28,8 +28,9 @@ class BO_algo(object):
         # Otherwise, the extended evaluation will break.
 
         # We define the kernel (prior) for the objective and constraint function
-        obj_kernel = ConstantKernel(1.5)*RBF(1.5)
-        con_kernel = ConstantKernel(3.5)*RBF(2)
+        # We introduce the WhiteKernel to encapsulate some noise in the measurements
+        obj_kernel = ConstantKernel(1.5)*RBF(1.5, length_scale_bounds="fixed") + WhiteKernel(0.0222, noise_level_bounds="fixed")
+        con_kernel = ConstantKernel(3.5)*RBF(2, length_scale_bounds="fixed") + WhiteKernel(0.00222, noise_level_bounds="fixed")
 
         # We initialize to GP to track the objective and constraint function
         self.constraint_model = GaussianProcessRegressor(kernel=con_kernel)  # TODO : GP model for the constraint function
