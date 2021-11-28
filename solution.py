@@ -185,8 +185,8 @@ class BO_algo(object):
             # From all the points that satisfy the condition we find the point which has the min function value
             opt_point = min([point for point in con_sat], key = lambda x: x[2])[:2]
         except:
-            # if none of the points satisfy the condition we simply take the point with the lowest function value
-            opt_point = min([point for point in self.previous_points], key=lambda x: x[2])[:2]
+            # if none of the points satisfy the condition we simply take the point with the lowest constraint values
+            opt_point = min([point for point in self.previous_points], key=lambda x: x[3])[:2]
         return  np.atleast_2d(opt_point)
 
 
