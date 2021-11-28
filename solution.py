@@ -46,10 +46,17 @@ class BO_algo(object):
         """
         size_of_data = len(self.previous_points)
 
-        if(size_of_data == 0):
-            explor_vs_exploi = 1
+        # The prob of the coin showing head should ideally be adaptive
+        # We tried tying it together with the size of self.previous_points
+
+        if self.previous_points:
+            con_min = min([point for point in self.previous_points], key=lambda x: x[2])[3]
+            if con_min < 0:
+                explor_vs_exploi = 0
+            else:
+                explor_vs_exploi = 0.7
         else:
-            explor_vs_exploi = np.exp(-size_of_data)
+            explor_vs_exploi = 0
 
         # We toss a coin to decide if we should choose the next point according to the acquisition function
         # or if we should choose a random points
@@ -59,7 +66,20 @@ class BO_algo(object):
             # We already have data points
             if coin == 1:
                 # The coin flip decided to explore
-                return np.ndarray((1, 2), buffer=np.random.uniform(0, 6, 2))
+
+                # Rather than randomly picking a point we try to be a bit more intelligent by limiting the domain
+                x_min = min([point for point in self.previous_points], key=lambda x: x[3])[:2]
+                mean, std = self.constraint_model.predict(np.atleast_2d(x_min), return_std=True)
+                lb = mean - 2 * std
+                ub = mean + 2 * std
+                if lb > 6 or lb < 0 and ub > 6 or ub < 0:
+                    return np.ndarray((1, 2), buffer=np.random.uniform(0, 6, 2))
+                elif lb < 0 and ub < 6:
+                    return np.ndarray((1, 2), buffer=np.random.uniform(0, ub, 2))
+                elif lb > 0 and ub > 6:
+                    return np.ndarray((1, 2), buffer=np.random.uniform(lb, 6, 2))
+                else:
+                    return np.ndarray((1, 2), buffer=np.random.uniform(lb, ub, 2))
             else:
                 # The coin flip decided to exploit
                 return self.optimize_acquisition_function()
@@ -132,8 +152,9 @@ class BO_algo(object):
 
         # Step 5: Incorporate the constraint function into the EI according to Gelbart et al (7)
         EI_constraint = scipy.stats.norm(con_mean, con_sigma).cdf(0) # prob that the constraint is satisfied (c<0)
-        likelihood = np.exp(self.constraint_model.log_marginal_likelihood())
+        likelihood = np.exp(self.constraint_model.log_marginal_likelihood()) # the likelihood
 
+        # We naively tried averaging both values and achieved good results
         EI = EI * ((EI_constraint + likelihood)/2)
 
         return EI
@@ -171,11 +192,14 @@ class BO_algo(object):
         """
 
         # TODO: enter your code here
-        con_sat = []
         try:
+            # We are interested in the cases where the condition value is < 0
+            # From all the points that satisfy the condition we find the point which has the min function value
             x_opt = min([point for point in self.previous_points if point[3] < 0], key = lambda x: x[2])[:2]
         except:
-            x_opt = min([point for point in self.previous_points], key = lambda x: x[3])[:2] #if none of the observed datapoints has c<0 we take the one with smallest c.
+            # if none of the points satisfy the condition we simply take the point with the lowest condition value
+            # Maybe room for improvement here
+            x_opt = min([point for point in self.previous_points], key = lambda x: x[3])[:2]
         return np.atleast_2d(x_opt)
         """
         try:
