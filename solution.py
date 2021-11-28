@@ -29,8 +29,8 @@ class BO_algo(object):
 
         # We define the kernel (prior) for the objective and constraint function
         # We introduce the WhiteKernel to encapsulate some noise in the measurements
-        obj_kernel = ConstantKernel(1.5)*RBF(1.5, length_scale_bounds="fixed") + WhiteKernel(0.0222, noise_level_bounds="fixed")
-        con_kernel = ConstantKernel(3.5)*RBF(2, length_scale_bounds="fixed") + WhiteKernel(0.00222, noise_level_bounds="fixed")
+        obj_kernel = ConstantKernel(1.5)*RBF(1.5, length_scale_bounds="fixed") + WhiteKernel(0.01, noise_level_bounds="fixed")
+        con_kernel = ConstantKernel(3.5)*RBF(2, length_scale_bounds="fixed") + WhiteKernel(0.005, noise_level_bounds="fixed")
 
         # We initialize to GP to track the objective and constraint function
         self.constraint_model = GaussianProcessRegressor(kernel=con_kernel)  # TODO : GP model for the constraint function
@@ -39,7 +39,6 @@ class BO_algo(object):
     def next_recommendation(self) -> np.ndarray:
         """
         Recommend the next input to sample.
-
         Returns
         -------
         recommendation: np.ndarray
@@ -73,7 +72,6 @@ class BO_algo(object):
     def optimize_acquisition_function(self) -> np.ndarray:  # DON'T MODIFY THIS FUNCTION
         """
         Optimizes the acquisition function.
-
         Returns
         -------
         x_opt: np.ndarray
@@ -103,12 +101,10 @@ class BO_algo(object):
     def acquisition_function(self, x: np.ndarray) -> np.ndarray:
         """
         Compute the acquisition function.
-
         Parameters
         ----------
         x: np.ndarray
             point in the domain of f
-
         Returns
         ------
         af_value: float
@@ -136,14 +132,14 @@ class BO_algo(object):
 
         # Step 5: Incorporate the constraint function into the EI according to Gelbart et al (7)
         EI_constraint = scipy.stats.norm(con_mean, con_sigma).cdf(0) # prob that the constraint is satisfied (c<0)
-        EI = EI*EI_constraint
+        #EI = EI*EI_constraint
+        EI = EI * np.exp(self.constraint_model.log_marginal_likelihood())
 
         return EI
 
     def add_data_point(self, x: np.ndarray, z: float, c: float):
         """
         Add data points to the model.
-
         Parameters
         ----------
         x: np.ndarray
@@ -167,7 +163,6 @@ class BO_algo(object):
     def get_solution(self) -> np.ndarray:
         """
         Return x_opt that is believed to be the minimizer of f.
-
         Returns
         -------
         solution: np.ndarray
@@ -188,7 +183,6 @@ class BO_algo(object):
             for point in self.previous_points:
                 if point[3] < 0:
                     con_sat.append[point]
-
             # From all the points that satisfy the condition we find the point which has the min function value
             opt_point = min([point for point in con_sat], key = lambda x: x[2])[:2]
         except:
